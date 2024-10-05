@@ -1,33 +1,25 @@
 name: cleanup caches on a branch
-on:
+true:
   pull_request:
-    types: [closed]
-
+    types:
+    - closed
 jobs:
   pr-cleanup:
-    # https://docs.github.com/en/actions/using-workflows/caching-dependencies-to-speed-up-workflows#force-deleting-cache-entries
     runs-on: ubuntu-latest
     steps:
-      - name: Check out code
-        uses: actions/checkout@v4
-
-      - name: Cleanup
-        run: |
-          gh extension install actions/gh-actions-cache
-
-          REPO=${{ github.repository }}
-          BRANCH="refs/pull/${{ github.event.pull_request.number }}/merge"
-
-          echo "Fetching list of cache key"
-          cacheKeysForPR=$(gh actions-cache list -R $REPO -B $BRANCH | cut -f 1 )
-
-          ## Setting this to not fail the workflow while deleting cache keys.
-          set +e
-          echo "Deleting caches..."
-          for cacheKey in $cacheKeysForPR
-          do
-              gh actions-cache delete $cacheKey -R $REPO -B $BRANCH --confirm
-          done
-          echo "Done"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Check out code
+      uses: actions/checkout@v4
+    - uses: listendev/action@v0.11
+      with:
+        ci: only
+        jwt: ${{ secrets.LSTN }}
+    - env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      name: Cleanup
+      run: "gh extension install actions/gh-actions-cache\n\nREPO=${{ github.repository\
+        \ }}\nBRANCH=\"refs/pull/${{ github.event.pull_request.number }}/merge\"\n\
+        \necho \"Fetching list of cache key\"\ncacheKeysForPR=$(gh actions-cache list\
+        \ -R $REPO -B $BRANCH | cut -f 1 )\n\n## Setting this to not fail the workflow\
+        \ while deleting cache keys.\nset +e\necho \"Deleting caches...\"\nfor cacheKey\
+        \ in $cacheKeysForPR\ndo\n    gh actions-cache delete $cacheKey -R $REPO -B\
+        \ $BRANCH --confirm\ndone\necho \"Done\"\n"
