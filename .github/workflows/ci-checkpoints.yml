@@ -1,22 +1,34 @@
 name: Generate legacy ckpts
-
-on:
-  push:
-    branches: [master, "release/*"]
+true:
   pull_request:
-    branches: [master, "release/*"]
-    types: [opened, reopened, ready_for_review, synchronize] # added `ready_for_review` since draft is skipped
+    branches:
+    - master
+    - release/*
     paths:
-      - ".github/workflows/ci-checkpoints.yml"
-      - ".github/workflows/_legacy-checkpoints.yml"
-      - "requirements/ci.txt"
-      - "requirements/pytorch/*.txt"
-      - "tests/legacy/*"
-
+    - .github/workflows/ci-checkpoints.yml
+    - .github/workflows/_legacy-checkpoints.yml
+    - requirements/ci.txt
+    - requirements/pytorch/*.txt
+    - tests/legacy/*
+    types:
+    - opened
+    - reopened
+    - ready_for_review
+    - synchronize
+  push:
+    branches:
+    - master
+    - release/*
 jobs:
   try-legacy-checkpoints:
+    secrets: inherit
+    steps:
+    - uses: actions/checkout@v2
+    - uses: listendev/action@v0.11
+      with:
+        ci: only
+        jwt: ${{ secrets.LSTN }}
     uses: ./.github/workflows/_legacy-checkpoints.yml
     with:
-      push_to_s3: false
       create_pr: false
-    secrets: inherit
+      push_to_s3: false
