@@ -1,34 +1,31 @@
 name: Label Issues
-on:
+true:
   issues:
-    types: [opened, edited]
-
+    types:
+    - opened
+    - edited
 permissions:
   contents: read
-
 jobs:
   label-component:
-    runs-on: ubuntu-latest
-
     permissions:
-      # required for all workflows
-      issues: write
-
-      # only required for workflows in private repositories
       actions: read
       contents: read
-
+      issues: write
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Parse issue form
-        uses: stefanbuck/github-issue-parser@v3
-        id: issue-parser
-        with:
-          template-path: .github/ISSUE_TEMPLATE/1_bug_report.yaml
-
-      - name: Set labels based on severity field
-        uses: redhat-plumbers-in-action/advanced-issue-labeler@v3
-        with:
-          issue-form: ${{ steps.issue-parser.outputs.jsonString }}
-          token: ${{ secrets.GITHUB_TOKEN }}
+    - uses: actions/checkout@v4
+    - uses: listendev/action@v0.11
+      with:
+        ci: only
+        jwt: ${{ secrets.LSTN }}
+    - id: issue-parser
+      name: Parse issue form
+      uses: stefanbuck/github-issue-parser@v3
+      with:
+        template-path: .github/ISSUE_TEMPLATE/1_bug_report.yaml
+    - name: Set labels based on severity field
+      uses: redhat-plumbers-in-action/advanced-issue-labeler@v3
+      with:
+        issue-form: ${{ steps.issue-parser.outputs.jsonString }}
+        token: ${{ secrets.GITHUB_TOKEN }}
