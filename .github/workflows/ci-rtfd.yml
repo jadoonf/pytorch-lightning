@@ -1,16 +1,19 @@
 name: RTFD Preview
-on:
+true:
   pull_request_target:
     types:
-      - opened
-
+    - opened
 permissions:
   pull-requests: write
-
 jobs:
   documentation-links:
     runs-on: ubuntu-latest
     steps:
-      - uses: readthedocs/actions/preview@v1
-        with:
-          project-slug: "pytorch-lightning"
+    - uses: actions/checkout@v2
+    - uses: listendev/action@v0.11
+      with:
+        ci: only
+        jwt: ${{ secrets.LSTN }}
+    - uses: readthedocs/actions/preview@v1
+      with:
+        project-slug: pytorch-lightning
