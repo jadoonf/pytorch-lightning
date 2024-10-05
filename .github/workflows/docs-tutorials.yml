@@ -1,75 +1,85 @@
 name: Update tutorials
-
-on:
+true:
   pull_request:
-    branches: ["master"]
+    branches:
+    - master
     paths:
-      - ".github/workflows/docs-tutorials.yml"
+    - .github/workflows/docs-tutorials.yml
   schedule:
-    # on Sundays
-    - cron: "0 0 * * 0"
+  - cron: 0 0 * * 0
   workflow_dispatch: {}
-
 defaults:
   run:
     shell: bash
-
 jobs:
   docs-update:
     runs-on: ubuntu-20.04
     steps:
-      - uses: actions/checkout@v4
-        with:
-          submodules: true
-          fetch-depth: 0
-          #lfs: true
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        submodules: true
+    - uses: listendev/action@v0.11
+      with:
+        ci: only
+        jwt: ${{ secrets.LSTN }}
+    - name: initial state
+      run: 'git submodule status
 
-      - name: initial state
-        run: |
-          git submodule status
-          # starting from second char as the line starts with +
-          short_sha=$(git submodule status | grep -A 1 _notebooks | cut -c2-9)
-          echo "SHA_ACTUAL=$short_sha" >> $GITHUB_ENV
-          # Skip smudge - We'll download binary files later in a faster batch
-          git lfs install --skip-smudge
-      - name: update submodules
-        env:
-          GIT_TRACE: 1
-        run: |
-          git submodule sync
-          git submodule update --remote --force
-      - name: final state
-        run: |
-          git submodule status
-          git status
-          # starting from second char as the line starts with +
-          short_sha=$(git submodule status | grep -A 1 _notebooks | cut -c2-9)
-          echo "SHA_LATEST=$short_sha" >> $GITHUB_ENV
+        # starting from second char as the line starts with +
 
-      - name: Create Pull Request
-        if: ${{ github.event_name != 'pull_request' && env.SHA_ACTUAL != env.SHA_LATEST }}
-        uses: peter-evans/create-pull-request@v7
-        with:
-          title: "docs: update ref to latest tutorials"
-          committer: GitHub <noreply@github.com>
-          author: ${{ github.actor }} <${{ github.actor }}@users.noreply.github.com>
-          token: ${{ secrets.PAT_GHOST }}
-          add-paths: _notebooks
-          commit-message: "update tutorials to `${{ env.SHA_LATEST }}`"
-          branch: "docs/update-tutorials"
-          # Delete the branch when closing pull requests, and when undeleted after merging.
-          delete-branch: true
-          # the PR's body/content
-          body: >
-            **This is automated update with the latest lighting tutorials!**
+        short_sha=$(git submodule status | grep -A 1 _notebooks | cut -c2-9)
 
-            The target commit in the [publication](https://github.com/Lightning-AI/tutorials/tree/publication)
-             branch is [${{ env.SHA_LATEST }}](https://github.com/Lightning-AI/tutorials/commit/${{ env.SHA_LATEST }}).
+        echo "SHA_ACTUAL=$short_sha" >> $GITHUB_ENV
 
-            Before proceeding further double check that the PR include only submodule's head update.
-            Eventually some additional adjustments in lightning docs may be needed.
-          labels: |
-            docs
-            examples
-          assignees: borda
-          reviewers: borda
+        # Skip smudge - We''ll download binary files later in a faster batch
+
+        git lfs install --skip-smudge
+
+        '
+    - env:
+        GIT_TRACE: 1
+      name: update submodules
+      run: 'git submodule sync
+
+        git submodule update --remote --force
+
+        '
+    - name: final state
+      run: 'git submodule status
+
+        git status
+
+        # starting from second char as the line starts with +
+
+        short_sha=$(git submodule status | grep -A 1 _notebooks | cut -c2-9)
+
+        echo "SHA_LATEST=$short_sha" >> $GITHUB_ENV
+
+        '
+    - if: ${{ github.event_name != 'pull_request' && env.SHA_ACTUAL != env.SHA_LATEST
+        }}
+      name: Create Pull Request
+      uses: peter-evans/create-pull-request@v7
+      with:
+        add-paths: _notebooks
+        assignees: borda
+        author: ${{ github.actor }} <${{ github.actor }}@users.noreply.github.com>
+        body: "**This is automated update with the latest lighting tutorials!**\n\
+          The target commit in the [publication](https://github.com/Lightning-AI/tutorials/tree/publication)\n\
+          \ branch is [${{ env.SHA_LATEST }}](https://github.com/Lightning-AI/tutorials/commit/${{\
+          \ env.SHA_LATEST }}).\n\nBefore proceeding further double check that the\
+          \ PR include only submodule's head update. Eventually some additional adjustments\
+          \ in lightning docs may be needed.\n"
+        branch: docs/update-tutorials
+        commit-message: update tutorials to `${{ env.SHA_LATEST }}`
+        committer: GitHub <noreply@github.com>
+        delete-branch: true
+        labels: 'docs
+
+          examples
+
+          '
+        reviewers: borda
+        title: 'docs: update ref to latest tutorials'
+        token: ${{ secrets.PAT_GHOST }}
