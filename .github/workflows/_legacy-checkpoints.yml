@@ -1,156 +1,160 @@
 name: Create Legacy Ckpts
-
-on:
-  workflow_dispatch:
-    inputs:
-      push_to_s3:
-        description: "Push generated checkpoints to S3."
-        default: false
-        required: false
-        type: boolean
-      pl_version:
-        description: "PL version to generate a legacy checkpoint with. If not provided, uses PL from source."
-        default: ""
-        required: false
-        type: string
-      create_pr:
-        description: "Create a PR to enable testing PL with a new checkpoint."
-        default: false
-        required: false
-        type: boolean
+true:
   workflow_call:
     inputs:
-      push_to_s3:
-        description: "Push generated checkpoints to S3."
+      create_pr:
         default: false
+        description: Create a PR to enable testing PL with a new checkpoint.
         required: false
         type: boolean
       pl_version:
-        description: "PL version to generate a legacy checkpoint with. If not provided, uses PL from source."
-        default: ""
+        default: ''
+        description: PL version to generate a legacy checkpoint with. If not provided,
+          uses PL from source.
         required: false
         type: string
+      push_to_s3:
+        default: false
+        description: Push generated checkpoints to S3.
+        required: false
+        type: boolean
       upload_local:
-        description: "When releasing, it installs local but need to upload with the actual version tag."
         default: false
+        description: When releasing, it installs local but need to upload with the
+          actual version tag.
         required: false
         type: boolean
+  workflow_dispatch:
+    inputs:
       create_pr:
-        description: "Create a PR to enable testing PL with a new checkpoint."
         default: false
+        description: Create a PR to enable testing PL with a new checkpoint.
         required: false
         type: boolean
-
+      pl_version:
+        default: ''
+        description: PL version to generate a legacy checkpoint with. If not provided,
+          uses PL from source.
+        required: false
+        type: string
+      push_to_s3:
+        default: false
+        description: Push generated checkpoints to S3.
+        required: false
+        type: boolean
 env:
-  LEGACY_FOLDER: "tests/legacy"
-  TORCH_URL: "https://download.pytorch.org/whl/cpu/torch_stable.html"
-
+  LEGACY_FOLDER: tests/legacy
+  TORCH_URL: https://download.pytorch.org/whl/cpu/torch_stable.html
 defaults:
   run:
     shell: bash
-
 jobs:
-  create-legacy-ckpts:
-    runs-on: ubuntu-20.04
-    outputs:
-      pl-version: ${{ steps.decide-version.outputs.pl-version }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-python@v5
-        with:
-          # Python version here needs to be supported by all PL versions listed in back-compatible-versions.txt.
-          python-version: 3.8
-
-      - name: Install PL from source
-        env:
-          PACKAGE_NAME: pytorch
-          FREEZE_REQUIREMENTS: 1
-        timeout-minutes: 20
-        run: pip install . -f ${TORCH_URL}
-        if: inputs.pl_version == ''
-
-      - name: Install PL version
-        timeout-minutes: 20
-        run: pip install "pytorch-lightning==${{ inputs.pl_version }}" -f ${TORCH_URL}
-        if: inputs.pl_version != ''
-
-      - name: Adjust tests -> PL
-        if: ${{ matrix.pkg-name != 'lightning' }}
-        run: |
-          pip install -q -r .actions/requirements.txt
-          python .actions/assistant.py copy_replace_imports --source_dir="./tests" \
-            --source_import="lightning.fabric,lightning.pytorch" \
-            --target_import="lightning_fabric,pytorch_lightning"
-
-      - name: Pull legacy checkpoints
-        run: bash .actions/pull_legacy_checkpoints.sh
-
-      - name: Decide PL version to create a PR with
-        id: decide-version
-        run: python -c "import pytorch_lightning as pl; print(f'pl-version={pl.__version__}')" >> $GITHUB_OUTPUT || echo pl-version='' >> $GITHUB_OUTPUT
-
-      - name: Generate checkpoints
-        working-directory: ${{ env.LEGACY_FOLDER }}
-        run: bash generate_checkpoints.sh ${{ inputs.pl_version }}
-      - name: Rename local to actual version
-        if: inputs.upload_local
-        working-directory: ${{ env.LEGACY_FOLDER }}
-        run: mv checkpoints/local checkpoints/${{ steps.decide-version.outputs.pl-version }}
-
-      - name: "Determine: Keep artifact & DryRun"
-        run: |
-          python -c "print('KEEP_DAYS=' + str(30 if '${{ github.event_name }}'.startswith('pull_request') else 0))" >> $GITHUB_ENV
-          python -c "print('AWS_RUN=' + str('' if '${{inputs.push_to_s3}}' == 'true' else '--dryrun'))" >> $GITHUB_ENV
-
-      - name: Upload checkpoints to GitHub Actions artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: checkpoints-${{ github.sha }}
-          path: ${{ env.LEGACY_FOLDER }}/checkpoints/
-          retention-days: ${{ env.KEEP_DAYS }}
-          include-hidden-files: true
-
-      - run: pip install -r requirements/ci.txt
-      - name: Upload checkpoints to S3
-        working-directory: ${{ env.LEGACY_FOLDER }}
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_KEY }}
-          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
-        run: |
-          aws s3 sync $AWS_RUN checkpoints/ s3://pl-public-data/legacy/checkpoints/
-          zip -r checkpoints.zip checkpoints
-          aws s3 cp $AWS_RUN checkpoints.zip s3://pl-public-data/legacy/ --acl public-read
-
   add-ckpt-test:
-    runs-on: ubuntu-20.04
-    if: inputs.create_pr
-    needs: create-legacy-ckpts
     env:
       PL_VERSION: ${{ needs.create-legacy-ckpts.outputs.pl-version }}
+    if: inputs.create_pr
+    needs: create-legacy-ckpts
+    runs-on: ubuntu-20.04
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: master
+    - uses: actions/checkout@v4
+      with:
+        ref: master
+    - uses: listendev/action@v0.11
+      with:
+        ci: only
+        jwt: ${{ secrets.LSTN }}
+    - name: Append a new version to legacy checkpoint list
+      run: echo ${PL_VERSION} >> back-compatible-versions.txt
+      working-directory: ${{ env.LEGACY_FOLDER }}
+    - name: Create Pull Request
+      uses: peter-evans/create-pull-request@v7
+      with:
+        assignees: borda
+        author: ${{ github.actor }} <${{ github.actor }}@users.noreply.github.com>
+        body: '**This is automated addition of created checkpoints with the latest
+          `lightning` release!**'
+        commit-message: update tutorials to `${{ env.PL_VERSION }}`
+        committer: GitHub <noreply@github.com>
+        delete-branch: true
+        labels: 'checkpointing
 
-      - name: Append a new version to legacy checkpoint list
-        working-directory: ${{ env.LEGACY_FOLDER }}
-        run: echo ${PL_VERSION} >> back-compatible-versions.txt
+          tests
 
-      - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v7
-        with:
-          title: Adding test for legacy checkpoint created with ${{ env.PL_VERSION }}
-          committer: GitHub <noreply@github.com>
-          author: ${{ github.actor }} <${{ github.actor }}@users.noreply.github.com>
-          commit-message: "update tutorials to `${{ env.PL_VERSION }}`"
-          body: "**This is automated addition of created checkpoints with the latest `lightning` release!**"
-          delete-branch: true
-          token: ${{ secrets.PAT_GHOST }}
-          labels: |
-            checkpointing
-            tests
-            pl
-          assignees: borda
-          reviewers: borda
+          pl
+
+          '
+        reviewers: borda
+        title: Adding test for legacy checkpoint created with ${{ env.PL_VERSION }}
+        token: ${{ secrets.PAT_GHOST }}
+  create-legacy-ckpts:
+    outputs:
+      pl-version: ${{ steps.decide-version.outputs.pl-version }}
+    runs-on: ubuntu-20.04
+    steps:
+    - uses: actions/checkout@v4
+    - uses: listendev/action@v0.11
+      with:
+        ci: only
+        jwt: ${{ secrets.LSTN }}
+    - uses: actions/setup-python@v5
+      with:
+        python-version: 3.8
+    - env:
+        FREEZE_REQUIREMENTS: 1
+        PACKAGE_NAME: pytorch
+      if: inputs.pl_version == ''
+      name: Install PL from source
+      run: pip install . -f ${TORCH_URL}
+      timeout-minutes: 20
+    - if: inputs.pl_version != ''
+      name: Install PL version
+      run: pip install "pytorch-lightning==${{ inputs.pl_version }}" -f ${TORCH_URL}
+      timeout-minutes: 20
+    - if: ${{ matrix.pkg-name != 'lightning' }}
+      name: Adjust tests -> PL
+      run: "pip install -q -r .actions/requirements.txt\npython .actions/assistant.py\
+        \ copy_replace_imports --source_dir=\"./tests\" \\\n  --source_import=\"lightning.fabric,lightning.pytorch\"\
+        \ \\\n  --target_import=\"lightning_fabric,pytorch_lightning\"\n"
+    - name: Pull legacy checkpoints
+      run: bash .actions/pull_legacy_checkpoints.sh
+    - id: decide-version
+      name: Decide PL version to create a PR with
+      run: python -c "import pytorch_lightning as pl; print(f'pl-version={pl.__version__}')"
+        >> $GITHUB_OUTPUT || echo pl-version='' >> $GITHUB_OUTPUT
+    - name: Generate checkpoints
+      run: bash generate_checkpoints.sh ${{ inputs.pl_version }}
+      working-directory: ${{ env.LEGACY_FOLDER }}
+    - if: inputs.upload_local
+      name: Rename local to actual version
+      run: mv checkpoints/local checkpoints/${{ steps.decide-version.outputs.pl-version
+        }}
+      working-directory: ${{ env.LEGACY_FOLDER }}
+    - name: 'Determine: Keep artifact & DryRun'
+      run: 'python -c "print(''KEEP_DAYS='' + str(30 if ''${{ github.event_name }}''.startswith(''pull_request'')
+        else 0))" >> $GITHUB_ENV
+
+        python -c "print(''AWS_RUN='' + str('''' if ''${{inputs.push_to_s3}}'' ==
+        ''true'' else ''--dryrun''))" >> $GITHUB_ENV
+
+        '
+    - name: Upload checkpoints to GitHub Actions artifact
+      uses: actions/upload-artifact@v3
+      with:
+        include-hidden-files: true
+        name: checkpoints-${{ github.sha }}
+        path: ${{ env.LEGACY_FOLDER }}/checkpoints/
+        retention-days: ${{ env.KEEP_DAYS }}
+    - run: pip install -r requirements/ci.txt
+    - env:
+        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY }}
+        AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_KEY }}
+      name: Upload checkpoints to S3
+      run: 'aws s3 sync $AWS_RUN checkpoints/ s3://pl-public-data/legacy/checkpoints/
+
+        zip -r checkpoints.zip checkpoints
+
+        aws s3 cp $AWS_RUN checkpoints.zip s3://pl-public-data/legacy/ --acl public-read
+
+        '
+      working-directory: ${{ env.LEGACY_FOLDER }}
