@@ -1,105 +1,129 @@
 name: Package
-
-# see: https://help.github.com/en/actions/reference/events-that-trigger-workflows
-on:
-  push:
-    branches: [master, "release/*"]
+true:
   pull_request:
-    branches: [master, "release/*"]
-    types: [opened, reopened, ready_for_review, synchronize] # added `ready_for_review` since draft is skipped
+    branches:
+    - master
+    - release/*
     paths:
-      - ".actions/*"
-      - "requirements/ci.txt"
-      - ".github/actions/pkg-check/*"
-      - ".github/actions/pkg-install/*"
-      - ".github/workflows/_build-packages.yml"
-      - ".github/workflows/ci-pkg-install.yml"
-      - "setup.py"
-      - "src/**"
-      - "requirements/**"
-      - "!requirements/docs.txt"
-      - "!requirements/*/docs.txt"
-      - "!*.md"
-      - "!**/*.md"
-
+    - .actions/*
+    - requirements/ci.txt
+    - .github/actions/pkg-check/*
+    - .github/actions/pkg-install/*
+    - .github/workflows/_build-packages.yml
+    - .github/workflows/ci-pkg-install.yml
+    - setup.py
+    - src/**
+    - requirements/**
+    - '!requirements/docs.txt'
+    - '!requirements/*/docs.txt'
+    - '!*.md'
+    - '!**/*.md'
+    types:
+    - opened
+    - reopened
+    - ready_for_review
+    - synchronize
+  push:
+    branches:
+    - master
+    - release/*
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref }}
 defaults:
   run:
     shell: bash
-
 jobs:
   build-packages:
+    steps:
+    - uses: actions/checkout@v2
+    - uses: listendev/action@v0.11
+      with:
+        ci: only
+        jwt: ${{ secrets.LSTN }}
     uses: ./.github/workflows/_build-packages.yml
     with:
       artifact-name: dist-packages-${{ github.sha }}
-
   install-pkg:
     needs: build-packages
     runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: listendev/action@v0.11
+      with:
+        ci: only
+        jwt: ${{ secrets.LSTN }}
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+    - uses: actions/download-artifact@v3
+      with:
+        name: dist-packages-${{ github.sha }}
+        path: dist
+    - name: Set package dir
+      run: 'python -c "print(''PKG_DIR='' + {''notset'': ''lightning''}.get(''${{matrix.pkg-name}}'',
+        ''${{matrix.pkg-name}}''))" >> $GITHUB_ENV
+
+        '
+    - name: Install package - wheel & archive
+      timeout-minutes: 25
+      uses: ./.github/actions/pkg-install
+      with:
+        pkg-folder: dist/${{ env.PKG_DIR }}
+        pkg-name: ${{ matrix.pkg-name }}
+    - name: DocTests actions
+      run: 'pip install -q pytest -r requirements.txt
+
+        python -m pytest assistant.py
+
+        '
+      working-directory: .actions/
+    - if: contains(fromJSON('["fabric", "pytorch"]'), matrix.pkg-name)
+      name: Adjust code for standalone
+      run: "python .actions/assistant.py copy_replace_imports --source_dir=\"./src\"\
+        \ \\\n  --source_import=\"lightning.pytorch,lightning.fabric\" \\\n  --target_import=\"\
+        pytorch_lightning,lightning_fabric\"\n"
+    - name: Rename src folders
+      run: 'python -c "n = ''${{matrix.pkg-name}}'' ; n = n if n in (''fabric'', ''pytorch'')
+        else '''' ; print(''PKG_NAME='' + n)" >> $GITHUB_ENV
+
+        rm -f ./*/__*.py
+
+        rm -f ./**/__*.py
+
+        mv lightning lit  # rename lightning folder to prevent accidental local imports
+
+        '
+      working-directory: src/
+    - if: ${{ matrix.pkg-name == 'lightning' || matrix.pkg-name == 'notset' }}
+      name: drop Secondary doctest
+      run: "items=(\"data\")\nfor item in \"${items[@]}\"; do\n  echo \"Removing $item\"\
+        \n  rm -rf $item\ndone\n"
+      working-directory: src/lit
+    - name: Install pytest doctest extension
+      run: 'pip install -q -r requirements/doctests.txt
+
+        pip list
+
+        '
+    - env:
+        LIGHTING_TESTING: 1
+        PY_IGNORE_IMPORTMISMATCH: 1
+      name: DocTest package
+      run: python -m pytest src/lit/${PKG_NAME} --ignore-glob="**/cli/*-template/**"
+        --doctest-plus
     strategy:
       fail-fast: false
       matrix:
-        os: ["ubuntu-22.04", "macOS-12", "windows-2022"]
-        pkg-name: ["fabric", "pytorch", "lightning", "notset"]
-        python-version: ["3.9", "3.11"]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-      - uses: actions/download-artifact@v3
-        with:
-          name: dist-packages-${{ github.sha }}
-          path: dist
-
-      - name: Set package dir
-        run: |
-          python -c "print('PKG_DIR=' + {'notset': 'lightning'}.get('${{matrix.pkg-name}}', '${{matrix.pkg-name}}'))" >> $GITHUB_ENV
-      - name: Install package - wheel & archive
-        uses: ./.github/actions/pkg-install
-        timeout-minutes: 25
-        with:
-          pkg-folder: dist/${{ env.PKG_DIR }}
-          pkg-name: ${{ matrix.pkg-name }}
-
-      - name: DocTests actions
-        working-directory: .actions/
-        run: |
-          pip install -q pytest -r requirements.txt
-          python -m pytest assistant.py
-
-      - name: Adjust code for standalone
-        if: contains(fromJSON('["fabric", "pytorch"]'), matrix.pkg-name)
-        run: |
-          python .actions/assistant.py copy_replace_imports --source_dir="./src" \
-            --source_import="lightning.pytorch,lightning.fabric" \
-            --target_import="pytorch_lightning,lightning_fabric"
-      - name: Rename src folders
-        working-directory: src/
-        run: |
-          python -c "n = '${{matrix.pkg-name}}' ; n = n if n in ('fabric', 'pytorch') else '' ; print('PKG_NAME=' + n)" >> $GITHUB_ENV
-          rm -f ./*/__*.py
-          rm -f ./**/__*.py
-          mv lightning lit  # rename lightning folder to prevent accidental local imports
-      - name: drop Secondary doctest
-        if: ${{ matrix.pkg-name == 'lightning' || matrix.pkg-name == 'notset' }}
-        working-directory: src/lit
-        run: |
-          items=("data")
-          for item in "${items[@]}"; do
-            echo "Removing $item"
-            rm -rf $item
-          done
-      - name: Install pytest doctest extension
-        run: |
-          pip install -q -r requirements/doctests.txt
-          pip list
-
-      - name: DocTest package
-        env:
-          LIGHTING_TESTING: 1 # path for require wrapper
-          PY_IGNORE_IMPORTMISMATCH: 1
-        run: python -m pytest src/lit/${PKG_NAME} --ignore-glob="**/cli/*-template/**" --doctest-plus
+        os:
+        - ubuntu-22.04
+        - macOS-12
+        - windows-2022
+        pkg-name:
+        - fabric
+        - pytorch
+        - lightning
+        - notset
+        python-version:
+        - '3.9'
+        - '3.11'
