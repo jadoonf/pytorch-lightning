@@ -1,40 +1,48 @@
 name: Clear cache weekly
-
-on:
+true:
   pull_request:
     paths:
-      - ".github/workflows/call-clear-cache.yml"
+    - .github/workflows/call-clear-cache.yml
+  schedule:
+  - cron: 0 0 * * 0
   workflow_dispatch:
     inputs:
-      pattern:
-        description: "pattern for cleaning cache"
-        default: "pip-|conda"
-        required: false
-        type: string
       age-days:
-        description: "setting the age of caches in days to be dropped"
+        default: 5
+        description: setting the age of caches in days to be dropped
         required: true
         type: number
-        default: 5
-  schedule:
-    # on Sundays
-    - cron: "0 0 * * 0"
-
+      pattern:
+        default: pip-|conda
+        description: pattern for cleaning cache
+        required: false
+        type: string
 jobs:
   cron-clear:
     if: github.event_name == 'schedule' || github.event_name == 'pull_request'
+    steps:
+    - uses: actions/checkout@v2
+    - uses: listendev/action@v0.11
+      with:
+        ci: only
+        jwt: ${{ secrets.LSTN }}
     uses: Lightning-AI/utilities/.github/workflows/cleanup-caches.yml@v0.11.7
     with:
-      scripts-ref: v0.11.7
-      dry-run: ${{ github.event_name == 'pull_request' }}
-      pattern: "latest|docs"
       age-days: 7
-
+      dry-run: ${{ github.event_name == 'pull_request' }}
+      pattern: latest|docs
+      scripts-ref: v0.11.7
   direct-clear:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
+    steps:
+    - uses: actions/checkout@v2
+    - uses: listendev/action@v0.11
+      with:
+        ci: only
+        jwt: ${{ secrets.LSTN }}
     uses: Lightning-AI/utilities/.github/workflows/cleanup-caches.yml@v0.11.7
     with:
-      scripts-ref: v0.11.7
+      age-days: ${{ fromJSON(inputs.age-days) || 0 }}
       dry-run: ${{ github.event_name == 'pull_request' }}
-      pattern: ${{ inputs.pattern || 'pypi_wheels' }} # setting str in case of PR / debugging
-      age-days: ${{ fromJSON(inputs.age-days) || 0 }} # setting 0 in case of PR / debugging
+      pattern: ${{ inputs.pattern || 'pypi_wheels' }}
+      scripts-ref: v0.11.7
