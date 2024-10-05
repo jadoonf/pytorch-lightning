@@ -1,190 +1,239 @@
 name: Releasing packages
-
-# https://help.github.com/en/actions/reference/events-that-trigger-workflows
-on:
-  push:
-    branches: [master, "release/*"]
-  release:
-    types: [published]
-  pull_request: # this shall test only the part of workflow before publishing
-    branches: [master, "release/*"]
-    types: [opened, reopened, ready_for_review, synchronize]
+true:
+  pull_request:
+    branches:
+    - master
+    - release/*
     paths:
-      - "requirements/ci.txt"
-      - ".github/actions/pkg-check/*"
-      - ".github/actions/pkg-publish/*"
-      - ".github/workflows/_legacy-checkpoints.yml.yml"
-      - ".github/workflows/_build-packages.yml"
-      - ".github/workflows/release-pypi.yml"
-
+    - requirements/ci.txt
+    - .github/actions/pkg-check/*
+    - .github/actions/pkg-publish/*
+    - .github/workflows/_legacy-checkpoints.yml.yml
+    - .github/workflows/_build-packages.yml
+    - .github/workflows/release-pypi.yml
+    types:
+    - opened
+    - reopened
+    - ready_for_review
+    - synchronize
+  push:
+    branches:
+    - master
+    - release/*
+  release:
+    types:
+    - published
 defaults:
   run:
     shell: bash
-
 env:
   FREEZE_REQUIREMENTS: 1
-  TORCH_URL: "https://download.pytorch.org/whl/cpu/torch_stable.html"
-  PYTHON_VER: "3.9"
-
+  PYTHON_VER: '3.9'
+  TORCH_URL: https://download.pytorch.org/whl/cpu/torch_stable.html
 jobs:
   build-packages:
+    steps:
+    - uses: actions/checkout@v2
+    - uses: listendev/action@v0.11
+      with:
+        ci: only
+        jwt: ${{ secrets.LSTN }}
     uses: ./.github/workflows/_build-packages.yml
     with:
       artifact-name: dist-packages-${{ github.sha }}
-
-  upload-packages:
-    runs-on: ubuntu-22.04
-    needs: build-packages
-    if: github.event_name == 'release'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v3
-        with:
-          name: dist-packages-${{ github.sha }}
-          path: dist
-      - run: ls -lh dist/
-      - name: Upload to release
-        uses: AButler/upload-release-assets@v3.0
-        with:
-          files: "dist/*/*"
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-  release-version:
-    runs-on: ubuntu-22.04
-    outputs:
-      tag: ${{ steps.lai-package.outputs.version }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VER }}
-      - name: install Package
-        run: |
-          pip install . -f ${TORCH_URL}
-          pip list
-      - name: package Version
-        id: lai-package
-        run: python -c "import lightning ; print(f'version={lightning.__version__}')" >> $GITHUB_OUTPUT
-
-  signaling:
-    runs-on: ubuntu-22.04
-    needs: ["release-version", "build-packages"]
-    if: startsWith(github.event.ref, 'refs/tags') || github.event_name == 'release'
-    env:
-      TAG: ${{ needs.release-version.outputs.tag }}
-      BRANCH_NAME: "trigger/lightning-${{ needs.release-version.outputs.tag }}"
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          repository: gridai/base-images
-          token: ${{ secrets.PAT_GHOST }}
-      - name: Update lightning version
-        run: |
-          import json, os, re
-          tag = os.getenv('TAG')
-          fname_json = "versions.json"
-          with open(fname_json, encoding="utf-8") as fopen:
-              vers = json.load(fopen)
-          vers["lightning_version"] = tag
-          conda_ = vers["conda_snapshot"].split(".")
-          conda_[-1] = str(int(conda_[-1]) + 1)
-          vers["conda_snapshot"] = ".".join(conda_)
-          with open(fname_json, "w", encoding="utf-8") as fopen:
-              json.dump(vers, fopen, indent=2)
-              # satisfy pre-commit with line fixer
-              fopen.write(os.linesep)
-          fname_txt = "conda-user/user-env-requirements.txt"
-          with open(fname_txt, encoding="utf-8") as fopen:
-              reqs = fopen.read()
-          reqs = re.sub(r"lightning\w*==([\d\.]+)", f"lightning=={tag}", reqs)
-          with open(fname_txt, "w", encoding="utf-8") as fopen:
-              fopen.write(reqs)
-        shell: python
-      - run: cat versions.json
-
-      - name: Create Pull Request
-        if: github.event_name != 'pull_request'
-        uses: peter-evans/create-pull-request@v7
-        with:
-          title: "Bump lightning ver `${{ env.TAG }}`"
-          committer: GitHub <noreply@github.com>
-          author: ${{ github.actor }} <${{ github.actor }}@users.noreply.github.com>
-          token: ${{ secrets.PAT_GHOST }}
-          add-paths: |
-            versions.json
-            conda-user/user-env-requirements.txt
-          commit-message: "bumping lightning version -> (${{ env.TAG }})"
-          branch: "bump/lightning-${{ env.TAG }}"
-          # Delete the branch when closing pull requests, and when undeleted after merging.
-          delete-branch: true
-          # the PR"s body/content
-          body: >
-            **This is automated update with the latest lighting [release](https://github.com/Lightning-AI/lightning/releases/tag/${{ env.TAG }})!**
-
-            Please, act swiftly to land this PR as it is effectively blocking lightning release to be finished...
-          assignees: |
-            justusschock
-            borda
-          reviewers: |
-            justusschock
-            ethanwharris
-            borda
-
-  pre-publish-packages:
-    runs-on: ubuntu-22.04
-    needs: build-packages
-    if: startsWith(github.event.ref, 'refs/tags') || github.event_name == 'release'
-    strategy:
-      fail-fast: false
-      matrix:
-        name: ["FABRIC", "PYTORCH", "LIGHTNING"]
-    steps:
-      - uses: actions/checkout@v4 # needed for local action below
-      - uses: actions/download-artifact@v3
-        with:
-          name: dist-packages-${{ github.sha }}
-          path: dist
-      - name: Browse folder
-        id: folder
-        run: |
-          sudo apt install -q -y tree
-          tree -L 2 -h dist/
-          python -c "print('pkg=' + '${{ matrix.name }}'.lower())" >> $GITHUB_OUTPUT
-      - uses: ./.github/actions/pkg-publish
-        with:
-          pkg-folder: dist/${{ steps.folder.outputs.pkg }}
-          pypi-test-token: ${{ secrets[format('PYPI_TEST_TOKEN_{0}', matrix.name)] }}
-
-  publish-packages:
-    runs-on: ubuntu-22.04
-    needs: [build-packages]
-    if: startsWith(github.event.ref, 'refs/tags') || github.event_name == 'release'
-    strategy:
-      fail-fast: false
-      matrix:
-        name: ["FABRIC", "PYTORCH", "LIGHTNING"]
-    steps:
-      - uses: actions/checkout@v4 # needed for local action below
-      - uses: actions/download-artifact@v3
-        with:
-          name: dist-packages-${{ github.sha }}
-          path: dist
-      - name: Browse folder
-        id: folder
-        run: |
-          sudo apt install -q -y tree
-          tree -L 2 -h dist/
-          python -c "print('pkg=' + '${{ matrix.name }}'.lower())" >> $GITHUB_OUTPUT
-      - uses: ./.github/actions/pkg-publish
-        with:
-          pkg-folder: dist/${{ steps.folder.outputs.pkg }}
-          pypi-token: ${{ secrets[format('PYPI_TOKEN_{0}', matrix.name)] }}
-
   legacy-checkpoints:
-    needs: [build-packages]
+    needs:
+    - build-packages
+    secrets: inherit
+    steps:
+    - uses: actions/checkout@v2
+    - uses: listendev/action@v0.11
+      with:
+        ci: only
+        jwt: ${{ secrets.LSTN }}
     uses: ./.github/workflows/_legacy-checkpoints.yml
     with:
-      push_to_s3: ${{ startsWith(github.event.ref, 'refs/tags') || github.event_name == 'release' }}
-      upload_local: ${{ startsWith(github.event.ref, 'refs/tags') || github.event_name == 'release' }}
-      create_pr: ${{ startsWith(github.event.ref, 'refs/tags') || github.event_name == 'release' }}
-    secrets: inherit
+      create_pr: ${{ startsWith(github.event.ref, 'refs/tags') || github.event_name
+        == 'release' }}
+      push_to_s3: ${{ startsWith(github.event.ref, 'refs/tags') || github.event_name
+        == 'release' }}
+      upload_local: ${{ startsWith(github.event.ref, 'refs/tags') || github.event_name
+        == 'release' }}
+  pre-publish-packages:
+    if: startsWith(github.event.ref, 'refs/tags') || github.event_name == 'release'
+    needs: build-packages
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4
+    - uses: listendev/action@v0.11
+      with:
+        ci: only
+        jwt: ${{ secrets.LSTN }}
+    - uses: actions/download-artifact@v3
+      with:
+        name: dist-packages-${{ github.sha }}
+        path: dist
+    - id: folder
+      name: Browse folder
+      run: 'sudo apt install -q -y tree
+
+        tree -L 2 -h dist/
+
+        python -c "print(''pkg='' + ''${{ matrix.name }}''.lower())" >> $GITHUB_OUTPUT
+
+        '
+    - uses: ./.github/actions/pkg-publish
+      with:
+        pkg-folder: dist/${{ steps.folder.outputs.pkg }}
+        pypi-test-token: ${{ secrets[format('PYPI_TEST_TOKEN_{0}', matrix.name)] }}
+    strategy:
+      fail-fast: false
+      matrix:
+        name:
+        - FABRIC
+        - PYTORCH
+        - LIGHTNING
+  publish-packages:
+    if: startsWith(github.event.ref, 'refs/tags') || github.event_name == 'release'
+    needs:
+    - build-packages
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4
+    - uses: listendev/action@v0.11
+      with:
+        ci: only
+        jwt: ${{ secrets.LSTN }}
+    - uses: actions/download-artifact@v3
+      with:
+        name: dist-packages-${{ github.sha }}
+        path: dist
+    - id: folder
+      name: Browse folder
+      run: 'sudo apt install -q -y tree
+
+        tree -L 2 -h dist/
+
+        python -c "print(''pkg='' + ''${{ matrix.name }}''.lower())" >> $GITHUB_OUTPUT
+
+        '
+    - uses: ./.github/actions/pkg-publish
+      with:
+        pkg-folder: dist/${{ steps.folder.outputs.pkg }}
+        pypi-token: ${{ secrets[format('PYPI_TOKEN_{0}', matrix.name)] }}
+    strategy:
+      fail-fast: false
+      matrix:
+        name:
+        - FABRIC
+        - PYTORCH
+        - LIGHTNING
+  release-version:
+    outputs:
+      tag: ${{ steps.lai-package.outputs.version }}
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4
+    - uses: listendev/action@v0.11
+      with:
+        ci: only
+        jwt: ${{ secrets.LSTN }}
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VER }}
+    - name: install Package
+      run: 'pip install . -f ${TORCH_URL}
+
+        pip list
+
+        '
+    - id: lai-package
+      name: package Version
+      run: python -c "import lightning ; print(f'version={lightning.__version__}')"
+        >> $GITHUB_OUTPUT
+  signaling:
+    env:
+      BRANCH_NAME: trigger/lightning-${{ needs.release-version.outputs.tag }}
+      TAG: ${{ needs.release-version.outputs.tag }}
+    if: startsWith(github.event.ref, 'refs/tags') || github.event_name == 'release'
+    needs:
+    - release-version
+    - build-packages
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        repository: gridai/base-images
+        token: ${{ secrets.PAT_GHOST }}
+    - uses: listendev/action@v0.11
+      with:
+        ci: only
+        jwt: ${{ secrets.LSTN }}
+    - name: Update lightning version
+      run: "import json, os, re\ntag = os.getenv('TAG')\nfname_json = \"versions.json\"\
+        \nwith open(fname_json, encoding=\"utf-8\") as fopen:\n    vers = json.load(fopen)\n\
+        vers[\"lightning_version\"] = tag\nconda_ = vers[\"conda_snapshot\"].split(\"\
+        .\")\nconda_[-1] = str(int(conda_[-1]) + 1)\nvers[\"conda_snapshot\"] = \"\
+        .\".join(conda_)\nwith open(fname_json, \"w\", encoding=\"utf-8\") as fopen:\n\
+        \    json.dump(vers, fopen, indent=2)\n    # satisfy pre-commit with line\
+        \ fixer\n    fopen.write(os.linesep)\nfname_txt = \"conda-user/user-env-requirements.txt\"\
+        \nwith open(fname_txt, encoding=\"utf-8\") as fopen:\n    reqs = fopen.read()\n\
+        reqs = re.sub(r\"lightning\\w*==([\\d\\.]+)\", f\"lightning=={tag}\", reqs)\n\
+        with open(fname_txt, \"w\", encoding=\"utf-8\") as fopen:\n    fopen.write(reqs)\n"
+      shell: python
+    - run: cat versions.json
+    - if: github.event_name != 'pull_request'
+      name: Create Pull Request
+      uses: peter-evans/create-pull-request@v7
+      with:
+        add-paths: 'versions.json
+
+          conda-user/user-env-requirements.txt
+
+          '
+        assignees: 'justusschock
+
+          borda
+
+          '
+        author: ${{ github.actor }} <${{ github.actor }}@users.noreply.github.com>
+        body: '**This is automated update with the latest lighting [release](https://github.com/Lightning-AI/lightning/releases/tag/${{
+          env.TAG }})!**
+
+          Please, act swiftly to land this PR as it is effectively blocking lightning
+          release to be finished...
+
+          '
+        branch: bump/lightning-${{ env.TAG }}
+        commit-message: bumping lightning version -> (${{ env.TAG }})
+        committer: GitHub <noreply@github.com>
+        delete-branch: true
+        reviewers: 'justusschock
+
+          ethanwharris
+
+          borda
+
+          '
+        title: Bump lightning ver `${{ env.TAG }}`
+        token: ${{ secrets.PAT_GHOST }}
+  upload-packages:
+    if: github.event_name == 'release'
+    needs: build-packages
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4
+    - uses: listendev/action@v0.11
+      with:
+        ci: only
+        jwt: ${{ secrets.LSTN }}
+    - uses: actions/download-artifact@v3
+      with:
+        name: dist-packages-${{ github.sha }}
+        path: dist
+    - run: ls -lh dist/
+    - name: Upload to release
+      uses: AButler/upload-release-assets@v3.0
+      with:
+        files: dist/*/*
+        repo-token: ${{ secrets.GITHUB_TOKEN }}
