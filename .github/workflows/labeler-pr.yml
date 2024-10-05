@@ -1,6 +1,6 @@
 name: Label Pull Requests
-on: [pull_request_target]
-
+true:
+- pull_request_target
 jobs:
   triage:
     permissions:
@@ -8,7 +8,12 @@ jobs:
       pull-requests: write
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/labeler@v5
-        with:
-          repo-token: "${{ secrets.GITHUB_TOKEN }}"
-          configuration-path: .github/label-change.yml
+    - uses: actions/checkout@v2
+    - uses: listendev/action@v0.11
+      with:
+        ci: only
+        jwt: ${{ secrets.LSTN }}
+    - uses: actions/labeler@v5
+      with:
+        configuration-path: .github/label-change.yml
+        repo-token: ${{ secrets.GITHUB_TOKEN }}
